@@ -1,0 +1,7 @@
+__pycache__/
+.pytest_cache/
+*.json
+.venv/
+config.local.toml
+.streamlit/secrets.toml
+.DS_Store

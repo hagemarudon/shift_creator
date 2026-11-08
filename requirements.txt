@@ -1,0 +1,6 @@
+ortools>=9.10
+streamlit>=1.40
+pandas>=2.2
+openpyxl>=3.1
+gspread>=6.0
+pytest>=8.0
