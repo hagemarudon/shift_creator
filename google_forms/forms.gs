@@ -87,15 +87,15 @@ function dates_() {
   return out;
 }
 
-// 月曜はじまりで1週間ずつに分ける
+// 最初の日から7日ずつに分ける（7日以内なら1問にまとまる）
 function weeks_(days) {
-  var out = [], cur = [];
+  var out = [];
+  var first = days[0].getTime();
   days.forEach(function (d) {
-    if (cur.length && d.getDay() === 1) { out.push(cur); cur = []; }
-    cur.push(d);
+    var i = Math.floor((d.getTime() - first) / (7 * 24 * 3600 * 1000));
+    (out[i] = out[i] || []).push(d);
   });
-  if (cur.length) out.push(cur);
-  return out;
+  return out.filter(function (w) { return w; });
 }
 
 function timeLabels_() {
