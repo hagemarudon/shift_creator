@@ -63,18 +63,54 @@ if oauth and "code" in st.query_params:
     st.query_params.clear()
 
 # ===== 入力 =====
-source = st.radio("フォームの回答", [SRC_FILE, SRC_GOOGLE, SRC_SAMPLE], horizontal=True, key="source")
+def secret(name: str):
+    try:
+        return st.secrets.get(name)
+    except Exception:  # noqa: BLE001  secrets.toml が無いとき
+        return None
+
+
+# Google Cloud でダウンロードしたJSONを、そのまま gcp_service_account_json に貼ってもよい
+service_creds = gs.service_account_credentials(secret("gcp_service_account") or secret("gcp_service_account_json"))
+default_url = str((secret("responses") or {}).get("url", ""))
+sources = [SRC_GOOGLE, SRC_FILE, SRC_SAMPLE] if (service_creds or default_url) else [SRC_FILE, SRC_GOOGLE, SRC_SAMPLE]
+source = st.radio("フォームの回答", sources, horizontal=True, key="source")
 dfs = None
 sheet_url = ""
+write_creds = None
+write_script_url = ""
 try:
     if source == SRC_FILE:
         up = st.file_uploader("回答のファイル", type=["csv", "xlsx"], label_visibility="collapsed")
         if up:
             dfs = read_file(up.name, up.getvalue())
         st.caption("回答のスプレッドシートで「ファイル → ダウンロード → カンマ区切り形式（.csv）」で保存したものを選べます。")
+    elif source == SRC_GOOGLE and (service_creds or default_url):
+        # ログインなし：サービスアカウントに共有したシート、またはウェブに公開したCSVを読む
+        c1, c2 = st.columns([4, 1])
+        sheet_url = c1.text_input("回答のURL", default_url, type="password" if gs.is_script_url(default_url) else "default")
+        if gs.is_script_url(sheet_url):
+            write_script_url = sheet_url
+        elif service_creds is not None and not gs.is_published_csv(sheet_url):
+            write_creds = service_creds
+            st.caption(f"スプレッドシートを {service_creds.service_account_email} に共有（編集者）しておくと読めます。")
+        cached = st.session_state.get("google_dfs")
+        if c2.button("再読み込み", width="stretch") or (sheet_url and (not cached or cached[0] != sheet_url)):
+            if gs.is_script_url(sheet_url):
+                cached = (sheet_url, gs.read_script(sheet_url))
+            elif gs.is_published_csv(sheet_url):
+                cached = (sheet_url, gs.read_published_csv(sheet_url))
+            elif service_creds is None:
+                raise ValueError("このURLは読めません。READMEの「回答を自動で読み込む」の設定をしてください。")
+            else:
+                cached = (sheet_url, gs.read_sheet(service_creds, sheet_url))
+            st.session_state["google_dfs"] = cached
+            st.session_state.pop("result", None)
+        if cached and cached[0] == sheet_url:
+            dfs = cached[1]
     elif source == SRC_GOOGLE:
         if oauth is None:
-            st.info("Googleログインの設定がまだです。設定方法は README の「Googleスプレッドシートから読む」にあります。"
+            st.info("Googleスプレッドシートから読む設定がまだです。設定方法は README の「回答を自動で読み込む」にあります。"
                     "それまではCSVかExcelで読み込めます。")
         elif google_credentials(oauth) is None:
             url = html.escape(gs.login_url(oauth, gs.make_state(oauth)))
@@ -92,12 +128,17 @@ try:
                 cached = st.session_state["google_dfs"] = (sheet_url, gs.read_sheet(google_credentials(oauth), sheet_url))
             if cached and cached[0] == sheet_url:
                 dfs = cached[1]
+                write_creds = google_credentials(oauth)
     else:
         sample = ROOT / "sample" / "フォーム回答サンプル.csv"
         dfs = read_file(sample.name, sample.read_bytes())
         st.download_button("サンプルの回答をダウンロード", sample.read_bytes(), sample.name)
 except Exception as e:  # noqa: BLE001
-    st.error(f"読み込めませんでした：{e}")
+    name = type(e).__name__
+    if name in ("PermissionError", "SpreadsheetNotFound", "APIError") and service_creds is not None:
+        st.error("スプレッドシートを読めませんでした。上のメールアドレスに共有されているか、URLが合っているか確かめてください。")
+    else:
+        st.error(f"読み込めませんでした：{e}")
 
 staff, notes = [], []
 if dfs is not None:
@@ -230,10 +271,13 @@ st.subheader("書き出し")
 first, last = problem.dates[0], problem.dates[-1]
 st.download_button("Excelでダウンロード", to_xlsx(problem, result),
                    f"シフト_{first:%m%d}-{last:%m%d}.xlsx", type="primary")
-if source == SRC_GOOGLE and sheet_url and oauth and google_credentials(oauth):
+if source == SRC_GOOGLE and sheet_url and (write_creds is not None or write_script_url):
     if st.button("元のGoogleスプレッドシートに書き込む"):
         try:
-            gs.write_sheets(google_credentials(oauth), sheet_url, all_sheets(problem, result))
+            if write_script_url:
+                gs.write_script(write_script_url, all_sheets(problem, result))
+            else:
+                gs.write_sheets(write_creds, sheet_url, all_sheets(problem, result))
             st.success("「シフト表」などのシートを書き込みました。")
         except Exception as e:  # noqa: BLE001
             st.error(f"書き込めませんでした：{e}")

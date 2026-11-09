@@ -18,7 +18,7 @@ python -m pytest tests            # テスト
 1. [google_forms/README.md](google_forms/README.md) の手順で、期間と営業時間に合わせたフォームを作り、スタッフに送る
 2. 回答が集まったら、アプリで回答を読み込む
    - 回答のスプレッドシートを「ファイル → ダウンロード → カンマ区切り形式（.csv）」か「Microsoft Excel」で保存してアップロード
-   - または Googleログインを設定して、スプレッドシートのURLから直接読む（下の「Googleスプレッドシートから読む」）
+   - または下の「回答を自動で読み込む」を設定すれば、アプリを開くだけで最新の回答を読む
 3. 左側で期間・祝日・勤務の長さ・必要人数を確かめ、「シフトを作る」を押す
 4. 「シフト表」「日別」「個人別」「集計」「人数不足」で確かめ、Excelでダウンロードする
 
@@ -82,10 +82,51 @@ Googleフォームの回答シート（`フォームの回答 1`）をそのま�
 
 Googleスプレッドシートから読んだときは、元のスプレッドシートに「シフト表」「個人別」「集計」「人数不足」シートを書き込めます。
 
+## 回答を自動で読み込む
+
+CSVをダウンロードしてアップロードしなくても、アプリを開くだけで最新の回答を読み込めるようにする方法です。どちらか1つを設定します。
+
+### A. Apps Script のウェブアプリ（おすすめ・Google Cloud 不要）
+
+回答のスプレッドシートに小さなスクリプト（`google_forms/responses_api.gs`）を付け、合言葉付きのURLで回答を渡します。
+手順は [google_forms/README.md](google_forms/README.md) の「アプリに回答を自動で渡す」にあります。できたURLを Secrets に入れます。
+
+```toml
+[responses]
+url = "https://script.google.com/macros/s/xxxx/exec?key=合言葉"
+```
+
+「元のGoogleスプレッドシートに書き込む」で、作ったシフトを同じスプレッドシートに書き込めます。URLは合言葉を含むので、人に教えないでください。
+
+### B. サービスアカウント
+
+Google Cloud でサービスアカウントの鍵（JSON）を作れる場合の方法です。組織のポリシー（`iam.disableServiceAccountKeyCreation`）で鍵を作れないアカウントでは使えないので、A にしてください。
+
+1. [Google Cloud コンソール](https://console.cloud.google.com/) でプロジェクトを作り、「APIとサービス → ライブラリ」で **Google Sheets API** を有効にする
+2. 「IAMと管理 → サービスアカウント」でサービスアカウントを作り（ロールは不要）、「キー → 鍵を追加 → JSON」でダウンロードする（合鍵なので人に送らない）
+3. 回答のスプレッドシートの「共有」で、JSONの `client_email` を **編集者** で追加する
+4. Secrets に入れる（`gcp_service_account_json` は `[responses]` より上に置く）
+
+```toml
+gcp_service_account_json = '''
+{ ダウンロードしたJSONの中身をそのまま }
+'''
+
+[responses]
+url = "https://docs.google.com/spreadsheets/d/xxxx/edit"
+```
+
+### Secrets の入れ場所
+
+- Streamlit Community Cloud：アプリの「Settings → Secrets」
+- 手元：`.streamlit/secrets.toml`（Gitで管理しない）
+
+「ファイル → 共有 → ウェブに公開」で CSV にしたURL（`…/pub?…output=csv`）を `url` に入れても読めますが、URLを知っている人は誰でも回答を見られます。
+
 ## Googleスプレッドシートから読む（Googleログイン）
 
-設定は timetable_creator と同じです。Google Cloud で Google Sheets API を有効にし、OAuth クライアント（ウェブ アプリケーション、リダイレクト URI はアプリのURL）を作って、
-`.streamlit/secrets.toml`（Gitで管理しない）に書きます。
+上の設定をしていないときは、使う人がそれぞれGoogleでログインして読むこともできます。設定は timetable_creator と同じです。
+Google Cloud で Google Sheets API を有効にし、OAuth クライアント（ウェブ アプリケーション、リダイレクト URI はアプリのURL）を作って、secrets に書きます。
 
 ```toml
 [google_oauth]
@@ -99,7 +140,8 @@ redirect_uri = "http://localhost:8501"
 - `shift/loader.py` 設定とフォームの回答（CSV・Excel・スプレッドシート）の読み込み、必要人数の計算
 - `shift/solver.py` シフトの自動作成（OR-Tools）
 - `shift/output.py` 表の作成と Excel への書き出し
-- `shift/google_sheets.py` Googleログイン（OAuth）とスプレッドシートの読み書き
+- `shift/google_sheets.py` スプレッドシートの読み書き（Apps Script・サービスアカウント・Googleログイン・ウェブに公開したCSV）
 - `shift/settings_io.py` 画面で入力した条件の保存
 - `google_forms/forms.gs` 出勤できる時間を聞く Google フォームを作る（Apps Script）
+- `google_forms/responses_api.gs` 回答をアプリに渡し、シフトを書き戻すウェブアプリ（Apps Script）
 - `app.py` 画面（Streamlit）／ `cli.py` コマンドライン版
