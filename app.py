@@ -207,11 +207,13 @@ if not staff or not period_dates or rule_errors:
     st.stop()
 
 # ===== スタッフ =====
-with st.expander(f"スタッフ（{len(staff)}人）"):
+n_answers = len(staff)
+with st.expander(f"スタッフ（回答 {n_answers}人）"):
     base = staff_frame(staff)
     edited_staff = st.data_editor(
-        base, hide_index=True, width="stretch", disabled=["氏名", "備考"],
+        base, hide_index=True, width="stretch", disabled=["氏名", "回答日時", "備考"],
         column_config={
+            "使う": st.column_config.CheckboxColumn(help="外した人はシフトに入れません"),
             "責任者": st.column_config.CheckboxColumn(),
             "最大日数": st.column_config.NumberColumn("最大日数", min_value=0, step=1),
             "希望時間": st.column_config.NumberColumn("希望時間（期間中）", min_value=0.0, step=0.5),
@@ -220,11 +222,14 @@ with st.expander(f"スタッフ（{len(staff)}人）"):
         key="staff_editor",
     )
     staff = apply_staff_frame(staff, edited_staff)
+if not staff:
+    st.warning("「使う」にチェックの入った人がいません。")
+    st.stop()
 
 problem = build_problem(staff, settings, period_dates)
 total_req_h = sum(problem.required.values()) * settings.slot_minutes / 60
 c1, c2, c3 = st.columns(3)
-c1.metric("スタッフ", f"{len(staff)}人")
+c1.metric("スタッフ", f"{len(staff)}人" if len(staff) == n_answers else f"{len(staff)}人／{n_answers}人")
 c2.metric("期間", f"{len(period_dates)}日")
 c3.metric("必要な人数×時間", f"{total_req_h:g}時間")
 

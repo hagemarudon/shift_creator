@@ -174,7 +174,7 @@ def parse_responses(df: pd.DataFrame, slot_minutes: int, today: dt.date | None =
         if key in by_name:
             notes.append(f"{name} さんは2回以上答えています。最後の回答を使います。")
         ref = _ref_date(row, ts_col, today)
-        staff = Staff(name=name)
+        staff = Staff(name=name, answered_at=_cell(row[ts_col]) if ts_col else "")
         for col, row_label in grid_cols:
             for chosen in SPLIT.split(_cell(row[col])):
                 if not chosen:
@@ -278,18 +278,21 @@ def response_dates(staff: list[Staff]) -> list[dt.date]:
 
 
 # ===== スタッフ表（画面で直す最大日数・上限時間・責任者） =====
-STAFF_COLS = ["氏名", "責任者", "最大日数", "希望時間", "上限時間", "備考"]
+STAFF_COLS = ["使う", "氏名", "回答日時", "責任者", "最大日数", "希望時間", "上限時間", "備考"]
 
 
 def staff_frame(staff: list[Staff]) -> pd.DataFrame:
     return pd.DataFrame([{
-        "氏名": s.name, "責任者": s.leader, "最大日数": s.max_days, "希望時間": s.target_hours,
-        "上限時間": s.max_hours, "備考": s.note,
+        "使う": True, "氏名": s.name, "回答日時": s.answered_at, "責任者": s.leader, "最大日数": s.max_days,
+        "希望時間": s.target_hours, "上限時間": s.max_hours, "備考": s.note,
     } for s in staff], columns=STAFF_COLS)
 
 
 def apply_staff_frame(staff: list[Staff], df: pd.DataFrame) -> list[Staff]:
-    """画面で直したスタッフ表を反映した新しいリストを返す（氏名で対応させる）。"""
+    """画面で直したスタッフ表を反映した新しいリストを返す（氏名で対応させる）。
+
+    「使う」を外した人は、シフトに入れないので返すリストから除く。
+    """
     rows = {str(r["氏名"]): r for _, r in df.iterrows()}
     out = []
     for s in staff:
@@ -297,8 +300,10 @@ def apply_staff_frame(staff: list[Staff], df: pd.DataFrame) -> list[Staff]:
         if r is None:
             out.append(s)
             continue
+        if "使う" in r and not (bool(r["使う"]) if not pd.isna(r["使う"]) else False):
+            continue
         out.append(Staff(
-            name=s.name, available=s.available, note=s.note,
+            name=s.name, available=s.available, note=s.note, answered_at=s.answered_at,
             leader=bool(r["責任者"]) if not pd.isna(r["責任者"]) else False,
             max_days=int(r["最大日数"]) if _number(r["最大日数"]) is not None else None,
             target_hours=_number(r["希望時間"]),

@@ -57,3 +57,22 @@ def test_rules():
                                 [D16, D17], 30, set())
     assert times == [600, 630, 660, 690]
     assert req[D16, 660] == 2 and req[D17, 660] == 3
+
+
+def test_unchecked_staff_are_left_out():
+    from shift.loader import apply_staff_frame, staff_frame
+
+    df = pd.DataFrame({
+        "タイムスタンプ": ["2026/11/10 9:00:00", "2026/11/10 9:05:00"],
+        "氏名": ["佐藤", "鈴木"],
+        "出勤 [10:00]": ["11/16(月)", "11/16(月)"],
+    })
+    staff, _ = parse_responses(df, 30, REF)
+    frame = staff_frame(staff)
+    assert list(frame["使う"]) == [True, True]
+    assert list(frame["回答日時"]) == ["2026/11/10 9:00:00", "2026/11/10 9:05:00"]
+    frame.loc[frame["氏名"] == "鈴木", "使う"] = False
+    frame.loc[frame["氏名"] == "佐藤", "最大日数"] = 2
+    out = apply_staff_frame(staff, frame)
+    assert [s.name for s in out] == ["佐藤"]
+    assert out[0].max_days == 2 and out[0].available == staff[0].available
