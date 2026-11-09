@@ -135,3 +135,29 @@ def write_sheets(creds, url: str, sheets: dict[str, pd.DataFrame]) -> None:
             ws.update(header + body)
         else:
             ws.update([df.columns.tolist()] + df.astype(str).values.tolist())
+
+
+# ===== ログインなしで読む（サービスアカウント・ウェブに公開したCSV） =====
+def service_account_credentials(info) -> "object | None":
+    """secrets の [gcp_service_account]（Google Cloud でダウンロードしたJSONの中身）から作る。無ければ None。"""
+    if not info:
+        return None
+    from google.oauth2.service_account import Credentials
+
+    if isinstance(info, str):  # JSONを文字列のまま貼ったとき
+        info = json.loads(info)
+    return Credentials.from_service_account_info(dict(info), scopes=SCOPES)
+
+
+def is_published_csv(url: str) -> bool:
+    """「ファイル → 共有 → ウェブに公開」で CSV にしたURL（…/pub?output=csv など）。"""
+    return "/pub" in url and "output=csv" in url
+
+
+def read_published_csv(url: str) -> dict[str, pd.DataFrame]:
+    """ウェブに公開した CSV を読む（ログイン不要）。"""
+    import io
+
+    with urllib.request.urlopen(url, timeout=30) as r:
+        data = r.read()
+    return {"フォームの回答": pd.read_csv(io.BytesIO(data), dtype=str, encoding="utf-8-sig", keep_default_na=False)}
