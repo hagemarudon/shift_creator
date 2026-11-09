@@ -82,45 +82,50 @@ Googleフォームの回答シート（`フォームの回答 1`）をそのま�
 
 Googleスプレッドシートから読んだときは、元のスプレッドシートに「シフト表」「個人別」「集計」「人数不足」シートを書き込めます。
 
-## 回答を自動で読み込む（サービスアカウント）
+## 回答を自動で読み込む
 
-回答のスプレッドシートを専用の「サービスアカウント」に共有しておくと、アプリを開くだけで最新の回答を読み込みます（使う人のログインは不要、回答は非公開のまま）。
-シフトを作ったあと「元のGoogleスプレッドシートに書き込む」で、同じスプレッドシートに「シフト表」などのシートを書き込めます。
+CSVをダウンロードしてアップロードしなくても、アプリを開くだけで最新の回答を読み込めるようにする方法です。どちらか1つを設定します。
 
-設定（最初に1回）
+### A. Apps Script のウェブアプリ（おすすめ・Google Cloud 不要）
 
-1. [Google Cloud コンソール](https://console.cloud.google.com/) でプロジェクトを作る
-2. 「APIとサービス → ライブラリ」で **Google Sheets API** を有効にする
-3. 「IAMと管理 → サービスアカウント → サービスアカウントを作成」で作る（名前は例えば `shift-reader`。ロールは付けなくてよい）
-4. できたサービスアカウントを開き「キー → 鍵を追加 → 新しい鍵を作成 → JSON」でファイルをダウンロードする
-   （このファイルは合鍵です。人に送ったり GitHub に上げたりしないでください）
-5. 回答のスプレッドシートの「共有」で、JSONの中の `client_email`（`…@….iam.gserviceaccount.com`）を **編集者** で追加する
-6. アプリに秘密の設定を入れる
-   - Streamlit Community Cloud：アプリの「Settings → Secrets」
-   - 手元：`.streamlit/secrets.toml`（Gitで管理しない）
+回答のスプレッドシートに小さなスクリプト（`google_forms/responses_api.gs`）を付け、合言葉付きのURLで回答を渡します。
+手順は [google_forms/README.md](google_forms/README.md) の「アプリに回答を自動で渡す」にあります。できたURLを Secrets に入れます。
 
-ダウンロードしたJSONの中身を `'''` と `'''` の間にそのまま貼り、下に回答のスプレッドシートのURLを書きます（`gcp_service_account_json` は `[responses]` より上に置いてください）。
+```toml
+[responses]
+url = "https://script.google.com/macros/s/xxxx/exec?key=合言葉"
+```
+
+「元のGoogleスプレッドシートに書き込む」で、作ったシフトを同じスプレッドシートに書き込めます。URLは合言葉を含むので、人に教えないでください。
+
+### B. サービスアカウント
+
+Google Cloud でサービスアカウントの鍵（JSON）を作れる場合の方法です。組織のポリシー（`iam.disableServiceAccountKeyCreation`）で鍵を作れないアカウントでは使えないので、A にしてください。
+
+1. [Google Cloud コンソール](https://console.cloud.google.com/) でプロジェクトを作り、「APIとサービス → ライブラリ」で **Google Sheets API** を有効にする
+2. 「IAMと管理 → サービスアカウント」でサービスアカウントを作り（ロールは不要）、「キー → 鍵を追加 → JSON」でダウンロードする（合鍵なので人に送らない）
+3. 回答のスプレッドシートの「共有」で、JSONの `client_email` を **編集者** で追加する
+4. Secrets に入れる（`gcp_service_account_json` は `[responses]` より上に置く）
 
 ```toml
 gcp_service_account_json = '''
-{
-  "type": "service_account",
-  ...
-}
+{ ダウンロードしたJSONの中身をそのまま }
 '''
 
 [responses]
 url = "https://docs.google.com/spreadsheets/d/xxxx/edit"
 ```
 
-`[responses]` の `url` を入れておくと、アプリを開いたときにそのスプレッドシートを読み込みます。画面でURLを変えて別のシートを読むこともできます。
-学校や会社の Google アカウントでは、管理者の設定で鍵（JSON）を作れないことがあります。その場合は個人の Google アカウントで作ってください。
+### Secrets の入れ場所
 
-「ファイル → 共有 → ウェブに公開」で CSV にしたURL（`…/pub?…output=csv`）を `url` に入れれば、サービスアカウントなしでも読めます。ただしURLを知っている人は誰でも回答を見られます。
+- Streamlit Community Cloud：アプリの「Settings → Secrets」
+- 手元：`.streamlit/secrets.toml`（Gitで管理しない）
+
+「ファイル → 共有 → ウェブに公開」で CSV にしたURL（`…/pub?…output=csv`）を `url` に入れても読めますが、URLを知っている人は誰でも回答を見られます。
 
 ## Googleスプレッドシートから読む（Googleログイン）
 
-サービスアカウントを設定していないときは、使う人がそれぞれGoogleでログインして読むこともできます。設定は timetable_creator と同じです。
+上の設定をしていないときは、使う人がそれぞれGoogleでログインして読むこともできます。設定は timetable_creator と同じです。
 Google Cloud で Google Sheets API を有効にし、OAuth クライアント（ウェブ アプリケーション、リダイレクト URI はアプリのURL）を作って、secrets に書きます。
 
 ```toml
@@ -135,7 +140,8 @@ redirect_uri = "http://localhost:8501"
 - `shift/loader.py` 設定とフォームの回答（CSV・Excel・スプレッドシート）の読み込み、必要人数の計算
 - `shift/solver.py` シフトの自動作成（OR-Tools）
 - `shift/output.py` 表の作成と Excel への書き出し
-- `shift/google_sheets.py` スプレッドシートの読み書き（サービスアカウント・Googleログイン・ウェブに公開したCSV）
+- `shift/google_sheets.py` スプレッドシートの読み書き（Apps Script・サービスアカウント・Googleログイン・ウェブに公開したCSV）
 - `shift/settings_io.py` 画面で入力した条件の保存
 - `google_forms/forms.gs` 出勤できる時間を聞く Google フォームを作る（Apps Script）
+- `google_forms/responses_api.gs` 回答をアプリに渡し、シフトを書き戻すウェブアプリ（Apps Script）
 - `app.py` 画面（Streamlit）／ `cli.py` コマンドライン版

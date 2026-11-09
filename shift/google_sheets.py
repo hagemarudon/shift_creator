@@ -161,3 +161,38 @@ def read_published_csv(url: str) -> dict[str, pd.DataFrame]:
     with urllib.request.urlopen(url, timeout=30) as r:
         data = r.read()
     return {"フォームの回答": pd.read_csv(io.BytesIO(data), dtype=str, encoding="utf-8-sig", keep_default_na=False)}
+
+
+# ===== Apps Script のウェブアプリ（google_forms/responses_api.gs）経由で読み書きする =====
+def is_script_url(url: str) -> bool:
+    return "script.google.com/macros/s/" in url
+
+
+def _script_text(raw: bytes) -> str:
+    text = raw.decode("utf-8-sig")
+    if text.startswith("ERROR:"):
+        raise ValueError(text[len("ERROR:"):].strip())
+    if text.lstrip().startswith("<"):
+        raise ValueError("ウェブアプリから回答を受け取れませんでした。デプロイの「アクセスできるユーザー」が「全員」になっているか確かめてください。")
+    return text
+
+
+def read_script(url: str) -> dict[str, pd.DataFrame]:
+    """ウェブアプリから回答のCSVを受け取る（URLに ?key=合言葉 を付けておく）。"""
+    import io
+
+    with urllib.request.urlopen(url, timeout=60) as r:
+        text = _script_text(r.read())
+    return {"フォームの回答": pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)}
+
+
+def write_script(url: str, sheets: dict[str, pd.DataFrame]) -> None:
+    """ウェブアプリに表を送り、回答のスプレッドシートにシートとして書き込んでもらう。"""
+    payload = {"sheets": {
+        name: [[str(c) for c in df.columns]] + df.astype(object).where(df.notna(), "").astype(str).values.tolist()
+        for name, df in sheets.items()
+    }}
+    req = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        _script_text(r.read())

@@ -78,6 +78,7 @@ source = st.radio("フォームの回答", sources, horizontal=True, key="source
 dfs = None
 sheet_url = ""
 write_creds = None
+write_script_url = ""
 try:
     if source == SRC_FILE:
         up = st.file_uploader("回答のファイル", type=["csv", "xlsx"], label_visibility="collapsed")
@@ -87,16 +88,20 @@ try:
     elif source == SRC_GOOGLE and (service_creds or default_url):
         # ログインなし：サービスアカウントに共有したシート、またはウェブに公開したCSVを読む
         c1, c2 = st.columns([4, 1])
-        sheet_url = c1.text_input("回答のスプレッドシートのURL", default_url)
-        if service_creds is not None and not gs.is_published_csv(sheet_url):
+        sheet_url = c1.text_input("回答のURL", default_url, type="password" if gs.is_script_url(default_url) else "default")
+        if gs.is_script_url(sheet_url):
+            write_script_url = sheet_url
+        elif service_creds is not None and not gs.is_published_csv(sheet_url):
             write_creds = service_creds
             st.caption(f"スプレッドシートを {service_creds.service_account_email} に共有（編集者）しておくと読めます。")
         cached = st.session_state.get("google_dfs")
         if c2.button("再読み込み", width="stretch") or (sheet_url and (not cached or cached[0] != sheet_url)):
-            if gs.is_published_csv(sheet_url):
+            if gs.is_script_url(sheet_url):
+                cached = (sheet_url, gs.read_script(sheet_url))
+            elif gs.is_published_csv(sheet_url):
                 cached = (sheet_url, gs.read_published_csv(sheet_url))
             elif service_creds is None:
-                raise ValueError("このURLを読むには、サービスアカウントの設定が必要です（READMEの「回答を自動で読み込む」）。")
+                raise ValueError("このURLは読めません。READMEの「回答を自動で読み込む」の設定をしてください。")
             else:
                 cached = (sheet_url, gs.read_sheet(service_creds, sheet_url))
             st.session_state["google_dfs"] = cached
@@ -266,10 +271,13 @@ st.subheader("書き出し")
 first, last = problem.dates[0], problem.dates[-1]
 st.download_button("Excelでダウンロード", to_xlsx(problem, result),
                    f"シフト_{first:%m%d}-{last:%m%d}.xlsx", type="primary")
-if source == SRC_GOOGLE and sheet_url and write_creds is not None:
+if source == SRC_GOOGLE and sheet_url and (write_creds is not None or write_script_url):
     if st.button("元のGoogleスプレッドシートに書き込む"):
         try:
-            gs.write_sheets(write_creds, sheet_url, all_sheets(problem, result))
+            if write_script_url:
+                gs.write_script(write_script_url, all_sheets(problem, result))
+            else:
+                gs.write_sheets(write_creds, sheet_url, all_sheets(problem, result))
             st.success("「シフト表」などのシートを書き込みました。")
         except Exception as e:  # noqa: BLE001
             st.error(f"書き込めませんでした：{e}")
