@@ -57,6 +57,7 @@ class Staff:
     max_hours: float | None = None   # 期間中の上限時間（必ず守る）
     leader: bool = False
     note: str = ""
+    answered_at: str = ""  # フォームのタイムスタンプ（画面の表示用）
 
 
 @dataclass
