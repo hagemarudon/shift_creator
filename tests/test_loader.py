@@ -76,3 +76,45 @@ def test_unchecked_staff_are_left_out():
     out = apply_staff_frame(staff, frame)
     assert [s.name for s in out] == ["佐藤"]
     assert out[0].max_days == 2 and out[0].available == staff[0].available
+
+
+def test_two_name_columns_after_switching_to_dropdown():
+    # 記述式の「氏名」を消してプルダウンを足すと、回答のシートに「氏名」が2列できる（CSVでは「氏名.1」）
+    df = pd.DataFrame([["佐藤", "11/16(月)", ""], ["", "11/17(火)", "鈴木"], ["", "11/16(月)", "佐藤"]],
+                      columns=["氏名", "出勤 [10:00]", "氏名.1"])
+    staff, notes = parse_responses(df, 30, REF)
+    assert [s.name for s in staff] == ["鈴木", "佐藤"]
+    assert any("佐藤 さんは2回以上" in n for n in notes)
+    dup = pd.DataFrame([["山田", "11/16(月)", ""], ["", "11/17(火)", "高橋"]], columns=["氏名", "出勤 [10:00]", "氏名"])
+    assert [s.name for s in parse_responses(dup, 30, REF)[0]] == ["山田", "高橋"]
+
+
+def test_same_person_with_full_width_space():
+    df = pd.DataFrame({"氏名": ["山田　太郎", "山田 太郎", "ＡＢ"], "出勤 [10:00]": ["11/16(月)", "11/17(火)", "11/16(月)"]})
+    staff, _ = parse_responses(df, 30, REF)
+    assert [s.name for s in staff] == ["山田 太郎", "ＡＢ"]
+
+
+def test_request_frame_round_trip():
+    from shift.loader import (build_problem, load_settings, read_request_frame, request_frame, request_notes,
+                              update_requests)
+    from shift.model import Staff
+
+    old = {("佐藤", D16): "入れたい", ("田中", D16): "入れない", ("佐藤", dt.date(2026, 11, 30)): "入れない"}
+    frame = request_frame(["佐藤", "鈴木"], [D16, D17], old)
+    assert list(frame.columns) == ["氏名", "11/16(月)", "11/17(火)"]
+    assert frame.loc[0, "11/16(月)"] == "入れたい" and frame.loc[1, "11/17(火)"] == "－"
+    frame.loc[0, "11/16(月)"] = "－"
+    frame.loc[1, "11/17(火)"] = "入れない"
+    assert read_request_frame(frame, [D16, D17]) == {("鈴木", D17): "入れない"}
+    # 表に出ていない人（田中）・日付（11/30）の指定は残す
+    new = update_requests(old, frame, ["佐藤", "鈴木"], [D16, D17])
+    assert new == {("鈴木", D17): "入れない", ("田中", D16): "入れない", ("佐藤", dt.date(2026, 11, 30)): "入れない"}
+
+    from pathlib import Path
+    settings = load_settings(Path(__file__).parent.parent / "config.toml")
+    staff = [Staff("佐藤", {(D16, 600)}), Staff("鈴木", {(D16, 600)})]
+    problem = build_problem(staff, settings, [D16, D17], {("佐藤", D17): "入れたい", ("鈴木", D16): "入れたい"})
+    assert problem.want == {("佐藤", D17), ("鈴木", D16)}
+    notes = request_notes(problem)
+    assert len(notes) == 1 and "佐藤" in notes[0] and "11/17(火)" in notes[0]

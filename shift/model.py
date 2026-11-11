@@ -67,6 +67,9 @@ class Problem:
     dates: list[dt.date]
     times: list[int]                       # 枠の開始分（期間を通して共通）
     required: dict[tuple[dt.date, int], int]  # (日付, 枠) → 必要人数。0 は営業時間外
+    # シフト作成者が日ごとに指定する人：(氏名, 日付)。want はなるべく入れる、avoid は必ず入れない
+    want: set[tuple[str, dt.date]] = field(default_factory=set)
+    avoid: set[tuple[str, dt.date]] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -92,3 +95,5 @@ class Result:
     # (日付, 枠) → 足りない人数
     shortage: dict[tuple[dt.date, int], int] = field(default_factory=dict)
     leader_missing: set[tuple[dt.date, int]] = field(default_factory=set)
+    # 「入れたい」と指定したのに入れられなかった (氏名, 日付)
+    want_missed: list[tuple[str, dt.date]] = field(default_factory=list)

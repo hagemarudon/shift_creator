@@ -6,7 +6,7 @@ from shift.solver import solve
 
 D = dt.date(2026, 11, 16)
 W = {"shortage": 1000, "leader_missing": 300, "long_shift": 200, "over": 10, "balance": 20,
-     "target_hours": 5, "work_day": 2}
+     "target_hours": 5, "work_day": 2, "want": 500}
 
 
 def settings(rules, **kw):
@@ -54,3 +54,26 @@ def test_leader_required():
     staff = [person("A", 600, 720), person("L", 600, 720, leader=True)]
     r = solve(build_problem(staff, s, [D]))
     assert {x.name for x in r.shifts} == {"L"} and not r.leader_missing
+
+
+def test_day_requests_want_and_avoid():
+    from shift.output import request_table
+
+    s = settings([Rule("毎日", "10:00", "12:00", 1)])
+    d2 = D + dt.timedelta(1)
+    staff = [person(n, 600, 720, dates=(D, d2)) for n in "ABC"]
+    requests = {("C", D): "入れたい", ("A", d2): "入れない", ("B", d2): "入れない"}
+    r = solve(build_problem(staff, s, [D, d2], requests))
+    assert not r.shortage and not r.want_missed
+    assert "C" in {x.name for x in r.shifts if x.date == D}  # 指定がなければ A か B で足りる日
+    assert {x.name for x in r.shifts if x.date == d2} == {"C"}
+    table = request_table(build_problem(staff, s, [D, d2], requests), r)
+    assert list(table["指定どおり"]) == ["○", "○", "○"]
+
+
+def test_avoid_is_kept_even_if_short_and_want_missed_is_reported():
+    s = settings([Rule("毎日", "10:00", "12:00", 1)])
+    staff = [person("A", 600, 720), person("B", 780, 840)]
+    r = solve(build_problem(staff, s, [D], {("A", D): "入れない", ("B", D): "入れたい"}))
+    assert not r.shifts and r.shortage
+    assert r.want_missed == [("B", D)]  # B は営業時間に出勤できないので入れられない

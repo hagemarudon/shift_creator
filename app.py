@@ -11,17 +11,19 @@ import pandas as pd
 import streamlit as st
 
 from shift import google_sheets as gs
-from shift.loader import (LOCAL_CONFIG_NAME, apply_staff_frame, build_problem, check_rules, load_settings,
-                          parse_responses, pick_response_sheet, read_file, response_dates, staff_frame)
+from shift.loader import (AVOID, LOCAL_CONFIG_NAME, NO_REQUEST, WANT, apply_staff_frame, build_problem, check_rules,
+                          load_settings, parse_responses, pick_response_sheet, read_file, request_frame, request_notes,
+                          response_dates, staff_frame, update_requests)
 from shift.model import Rule, date_label
-from shift.output import (all_sheets, day_html, person_table, shift_table, shortage_table, summary_table,
-                          to_xlsx)
+from shift.output import (all_sheets, day_html, person_table, request_table, shift_table, shortage_table,
+                          summary_table, to_xlsx)
 from shift.settings_io import save_settings
 from shift.solver import solve
 
 ROOT = Path(__file__).parent
 WEIGHT_LABELS = {
     "shortage": "人数不足をなくす",
+    "want": "「入れたい」の人を入れる",
     "leader_missing": "責任者を入れる",
     "long_shift": "原則の長さを超えない",
     "over": "人数を多くしすぎない",
@@ -226,12 +228,39 @@ if not staff:
     st.warning("「使う」にチェックの入った人がいません。")
     st.stop()
 
-problem = build_problem(staff, settings, period_dates)
+# ===== 日ごとの指定 =====
+# 表の人・期間が変わったら作り直す。指定は session_state に残すので、作り直しても消えない
+names = [s.name for s in staff]
+requests = st.session_state.setdefault("day_requests", {})
+sig = (tuple(names), tuple(period_dates))
+if st.session_state.get("request_sig") != sig:
+    st.session_state.pop(f"request_editor_{st.session_state.get('request_ver', 0)}", None)
+    st.session_state["request_sig"] = sig
+    st.session_state["request_base"] = request_frame(names, period_dates, requests)
+    st.session_state["request_ver"] = st.session_state.get("request_ver", 0) + 1
+shown = {k: v for k, v in requests.items() if k[0] in set(names) and k[1] in set(period_dates)}
+with st.expander("日ごとの指定（入れたい人・入れない人）", expanded=bool(shown)):
+    edited_requests = st.data_editor(
+        st.session_state["request_base"], hide_index=True, width="stretch", disabled=["氏名"],
+        height=min(36 * (len(names) + 1) + 3, 800),
+        column_config={"氏名": st.column_config.TextColumn(pinned=True),
+                       **{date_label(d): st.column_config.SelectboxColumn(options=[NO_REQUEST, WANT, AVOID], required=True)
+                          for d in period_dates}},
+        key=f"request_editor_{st.session_state['request_ver']}",
+    )
+    requests = st.session_state["day_requests"] = update_requests(requests, edited_requests, names, period_dates)
+    st.caption(f"「{AVOID}」の人はその日に入れません。「{WANT}」の人は、フォームで出勤できると答えた時間の中で"
+               "その日に入れます（人数不足をうめるほうを優先します）。")
+
+problem = build_problem(staff, settings, period_dates, requests)
+for n in request_notes(problem):
+    st.warning(n)
 total_req_h = sum(problem.required.values()) * settings.slot_minutes / 60
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("スタッフ", f"{len(staff)}人" if len(staff) == n_answers else f"{len(staff)}人／{n_answers}人")
 c2.metric("期間", f"{len(period_dates)}日")
 c3.metric("必要な人数×時間", f"{total_req_h:g}時間")
+c4.metric("日ごとの指定", f"{WANT} {len(problem.want)}・{AVOID} {len(problem.avoid)}")
 
 if st.button("シフトを作る", type="primary"):
     with st.spinner("シフトを計算中…"):
@@ -251,9 +280,13 @@ elif short_h:
                f"人数が足りない時間が延べ {short_h:g} 時間あります（「人数不足」タブ）。")
 else:
     st.success(f"{result.status}（{elapsed:.1f}秒）：{len(result.shifts)}件・{assigned_h:g}時間を配置。人数はすべて足りています。")
+if result.want_missed:
+    missed = "、".join(f"{date_label(d)} {n}" for n, d in result.want_missed)
+    st.warning(f"「{WANT}」にしたのに入れられなかった人がいます：{missed}（「日ごとの指定」タブ）")
 
 short_df = shortage_table(problem, result)
-tabs = st.tabs(["シフト表", "日別", "個人別", "集計", f"人数不足（{len(short_df)}）"])
+req_df = request_table(problem, result)
+tabs = st.tabs(["シフト表", "日別", "個人別", "集計", f"人数不足（{len(short_df)}）", f"日ごとの指定（{len(req_df)}）"])
 with tabs[0]:
     st.dataframe(shift_table(problem, result), width="stretch")
 with tabs[1]:
@@ -271,6 +304,11 @@ with tabs[4]:
         st.info("人数はすべて足りています。")
     else:
         st.dataframe(short_df, width="stretch", hide_index=True)
+with tabs[5]:
+    if req_df.empty:
+        st.info("指定はありません。")
+    else:
+        st.dataframe(req_df, width="stretch", hide_index=True)
 
 st.subheader("書き出し")
 first, last = problem.dates[0], problem.dates[-1]
