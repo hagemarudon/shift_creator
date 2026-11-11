@@ -63,7 +63,7 @@ def shift_table(problem: Problem, result: Result) -> pd.DataFrame:
 
 
 def day_grid(problem: Problem, result: Result, d: dt.date) -> pd.DataFrame:
-    """その日の 人×30分 の表。働く枠は ■。下に配置人数・必要人数。"""
+    """その日の 人×枠（時間刻み） の表。働く枠は ■。下に配置人数・必要人数。"""
     slot = problem.settings.slot_minutes
     shifts = sorted((s for s in result.shifts if s.date == d), key=lambda s: (s.start, s.end))
     cols = [to_hhmm(t) for t in problem.times]
@@ -200,17 +200,18 @@ def _write_table(ws, problem: Problem, result: Result) -> None:
 
 
 def _write_daily(ws, problem: Problem, result: Result) -> None:
-    """日ごとに、人×30分のマスを塗った表を縦に並べる。"""
+    """日ごとに、人×枠（時間刻み）のマスを塗った表を縦に並べる。"""
     slot = problem.settings.slot_minutes
     cnt = assigned_count(problem, result)
     ws.column_dimensions["A"].width = 24
     for j in range(len(problem.times)):
         ws.column_dimensions[get_column_letter(j + 2)].width = 6
+    labels = set(_label_slots(problem))
     r = 1
     for d in problem.dates:
         ws.cell(r, 1, date_label(d)).font = Font(bold=True, size=12)
         for j, t in enumerate(problem.times, start=2):
-            c = ws.cell(r, j, to_hhmm(t) if t % 60 == 0 else "")
+            c = ws.cell(r, j, to_hhmm(t) if j - 2 in labels else "")
             c.font = Font(size=9)
         r += 1
         for s in sorted((s for s in result.shifts if s.date == d), key=lambda s: (s.start, s.end)):
@@ -254,16 +255,22 @@ def to_xlsx(problem: Problem, result: Result) -> bytes:
     return buf.getvalue()
 
 
+def _label_slots(problem: Problem) -> list[int]:
+    """時刻の見出しを書く枠の番号。刻みが1時間より短ければ毎正時、そうでなければ全部の枠。"""
+    slot = problem.settings.slot_minutes
+    out = [i for i, t in enumerate(problem.times) if slot >= 60 or t % 60 == 0]
+    return out or list(range(0, len(problem.times), max(1, 60 // slot)))
+
+
 # ===== 画面用 HTML =====
 def day_html(problem: Problem, result: Result, d: dt.date) -> str:
     """その日のシフトを横棒で描く。下の行は配置人数／必要人数（足りない枠は赤）。"""
     cnt = assigned_count(problem, result)
     times = problem.times
-    per_hour = max(1, 60 // problem.settings.slot_minutes)
-    head = "".join(f"<th style='font-weight:normal;font-size:11px;text-align:left' colspan={per_hour}>{to_hhmm(t)}</th>"
-                   for t in times if t % 60 == 0)
-    lead = sum(1 for t in times[:per_hour] if t < next((u for u in times if u % 60 == 0), t))
-    first_pad = f"<th colspan={lead}></th>" if lead else ""
+    marks = _label_slots(problem) + [len(times)]
+    head = "".join(f"<th style='font-weight:normal;font-size:11px;text-align:left' colspan={b - a}>{to_hhmm(times[a])}</th>"
+                   for a, b in zip(marks, marks[1:]))
+    first_pad = f"<th colspan={marks[0]}></th>" if marks[0] else ""
     rows = []
     for s in sorted((s for s in result.shifts if s.date == d), key=lambda s: (s.start, s.end)):
         color = LONG_FILL if _is_long(problem, s.end - s.start) else WORK_FILL

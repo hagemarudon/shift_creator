@@ -1,6 +1,7 @@
 """画面で入力した条件を config.local.toml に保存する（次回からの初期値になる。Gitで管理しない）。"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .model import Settings
@@ -8,6 +9,11 @@ from .model import Settings
 
 def _hours(minutes: int) -> str:
     return f"{minutes / 60:g}"
+
+
+def _q(s: str) -> str:
+    """TOML の文字列（JSON の書き方は TOML でもそのまま読める）。"""
+    return json.dumps(str(s), ensure_ascii=False)
 
 
 def save_settings(settings: Settings, path: str | Path) -> None:
@@ -27,4 +33,8 @@ def save_settings(settings: Settings, path: str | Path) -> None:
     lines += ["[leader]", f"required = {'true' if settings.leader_required else 'false'}", "",
               "[solver]", f"time_limit_seconds = {settings.time_limit_seconds:g}", "", "[weights]"]
     lines += [f"{k} = {v}" for k, v in settings.weights.items()]
+    # フォームの回答の読み方（列の使い方・選択肢の読み替え）
+    for table, items in (("columns", settings.column_roles), ("choices", settings.choice_aliases)):
+        if items:
+            lines += ["", f"[{table}]"] + [f"{_q(k)} = {_q(v)}" for k, v in items.items()]
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")

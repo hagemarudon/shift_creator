@@ -45,12 +45,15 @@ class Settings:
     leader_required: bool = False
     time_limit_seconds: float = 30
     weights: dict[str, int] = field(default_factory=dict)
+    # フォームの回答の読み方：列見出し → 使い方（推測と違う列だけ）、読めない選択肢 → 読み替え（「9:30-12:00」など）
+    column_roles: dict[str, str] = field(default_factory=dict)
+    choice_aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class Staff:
     name: str
-    # 出勤できる (日付, 枠の開始分) の集まり
+    # 出勤できる (日付, 枠の開始分) の集まり。free があれば、シフトを作るときに今の刻みで作り直す
     available: set[tuple[dt.date, int]] = field(default_factory=set)
     max_days: int | None = None      # 期間中に入れる最大日数
     target_hours: float | None = None  # 期間中の希望勤務時間（なるべく近づける）
@@ -58,6 +61,8 @@ class Staff:
     leader: bool = False
     note: str = ""
     answered_at: str = ""  # フォームのタイムスタンプ（画面の表示用）
+    # フォームで答えた、出勤できる時間：日付 → [(開始分, 終了分), …]（刻みに関係なく、答えたとおり）
+    free: dict[dt.date, list[tuple[int, int]]] | None = None
 
 
 @dataclass

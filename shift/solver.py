@@ -1,6 +1,8 @@
 """シフトの自動作成（OR-Tools CP-SAT）。
 
-変数 x[人, 日, 枠] = その30分に働くか。出勤できる枠で、必要人数が1人以上の枠（営業時間）にだけ作る。
+変数 x[人, 日, 枠] = その枠（時間刻み。初期値30分）に働くか。出勤できる枠で、必要人数が1人以上の枠（営業時間）にだけ作る。
+
+重みは30分あたり（時間刻みを変えても、時間あたりの重さは変わらない）。日ごとの減点（want・work_day）は1日あたり。
 
 必須
 - 1日の勤務は1回（連続）まで。長さは最短〜延長の上限まで
@@ -24,6 +26,8 @@ def solve(problem: Problem, time_limit: float | None = None) -> Result:
     s = problem.settings
     w = s.weights
     slot = s.slot_minutes
+    # 重みは30分あたりなので、枠ごとの減点は 重み×刻み（分）、日ごとの減点は 重み×30 で数える
+    w = {k: v * (30 if k in ("want", "work_day") else slot) for k, v in w.items()}
     T = len(problem.times)
     min_len = max(1, -(-s.min_shift_minutes // slot))
     max_len = max(min_len, s.max_shift_minutes // slot)

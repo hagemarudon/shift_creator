@@ -11,9 +11,10 @@ import pandas as pd
 import streamlit as st
 
 from shift import google_sheets as gs
-from shift.loader import (AVOID, LOCAL_CONFIG_NAME, NO_REQUEST, WANT, apply_staff_frame, build_problem, check_rules,
-                          load_settings, parse_responses, pick_response_sheet, read_file, request_frame, request_notes,
-                          response_dates, staff_frame, update_requests)
+from shift.loader import (AVOID, LOCAL_CONFIG_NAME, NO_REQUEST, ROLES, WANT, alias_frame, apply_staff_frame,
+                          build_problem, check_rules, column_frame, guess_roles, load_settings, pick_response_sheet,
+                          read_alias_frame, read_file, read_responses, request_frame, request_notes, response_dates,
+                          staff_frame, update_requests)
 from shift.model import Rule, date_label
 from shift.output import (all_sheets, day_html, person_table, request_table, shift_table, shortage_table,
                           summary_table, to_xlsx)
@@ -32,6 +33,7 @@ WEIGHT_LABELS = {
     "work_day": "出勤日を少なくする",
 }
 SRC_FILE, SRC_GOOGLE, SRC_SAMPLE = "ファイル（CSV・Excel）", "Googleスプレッドシート", "サンプルデータ"
+SLOT_CHOICES = [15, 30, 60, 120]
 
 st.set_page_config(page_title="シフト作成", layout="wide")
 st.title("シフト作成")
@@ -87,34 +89,42 @@ try:
         if up:
             dfs = read_file(up.name, up.getvalue())
         st.caption("回答のスプレッドシートで「ファイル → ダウンロード → カンマ区切り形式（.csv）」で保存したものを選べます。")
-    elif source == SRC_GOOGLE and (service_creds or default_url):
-        # ログインなし：サービスアカウントに共有したシート、またはウェブに公開したCSVを読む
+    elif source == SRC_GOOGLE and (service_creds or default_url or oauth is None):
+        # ログインなし：Apps Script・サービスアカウント・リンクで共有したシート・ウェブに公開したCSVを読む
         c1, c2 = st.columns([4, 1])
-        sheet_url = c1.text_input("回答のURL", default_url, type="password" if gs.is_script_url(default_url) else "default")
+        sheet_url = c1.text_input("回答のURL", default_url, type="password" if gs.is_script_url(default_url) else "default",
+                                  help="フォームの回答が入っているスプレッドシートのURL（フォームのURLではありません）")
         if gs.is_script_url(sheet_url):
             write_script_url = sheet_url
-        elif service_creds is not None and not gs.is_published_csv(sheet_url):
+        elif service_creds is not None and gs.is_sheet_url(sheet_url) and not gs.is_published_csv(sheet_url):
             write_creds = service_creds
             st.caption(f"スプレッドシートを {service_creds.service_account_email} に共有（編集者）しておくと読めます。")
         cached = st.session_state.get("google_dfs")
-        if c2.button("再読み込み", width="stretch") or (sheet_url and (not cached or cached[0] != sheet_url)):
+        if gs.is_form_url(sheet_url):
+            st.error(gs.FORM_URL_HELP)
+        elif c2.button("再読み込み", width="stretch") or (sheet_url and (not cached or cached[0] != sheet_url)):
             if gs.is_script_url(sheet_url):
                 cached = (sheet_url, gs.read_script(sheet_url))
             elif gs.is_published_csv(sheet_url):
                 cached = (sheet_url, gs.read_published_csv(sheet_url))
+            elif not gs.is_sheet_url(sheet_url):
+                raise ValueError("このURLは読めません。フォームの回答が入っているGoogleスプレッドシートのURLを貼ってください。")
             elif service_creds is None:
-                raise ValueError("このURLは読めません。READMEの「回答を自動で読み込む」の設定をしてください。")
+                cached = (sheet_url, gs.read_shared_sheet(sheet_url))
             else:
-                cached = (sheet_url, gs.read_sheet(service_creds, sheet_url))
+                try:
+                    cached = (sheet_url, gs.read_sheet(service_creds, sheet_url))
+                except Exception:  # noqa: BLE001  サービスアカウントに共有していなくても、リンクで共有していれば読める
+                    cached = (sheet_url, gs.read_shared_sheet(sheet_url))
+                    st.session_state["google_via_link"] = sheet_url
             st.session_state["google_dfs"] = cached
             st.session_state.pop("result", None)
         if cached and cached[0] == sheet_url:
             dfs = cached[1]
+        if st.session_state.get("google_via_link") == sheet_url:
+            write_creds = None  # リンクの共有で読んだシートには書き込めない
     elif source == SRC_GOOGLE:
-        if oauth is None:
-            st.info("Googleスプレッドシートから読む設定がまだです。設定方法は README の「回答を自動で読み込む」にあります。"
-                    "それまではCSVかExcelで読み込めます。")
-        elif google_credentials(oauth) is None:
+        if google_credentials(oauth) is None:
             url = html.escape(gs.login_url(oauth, gs.make_state(oauth)))
             st.markdown(f'<a href="{url}" target="_self" style="display:inline-block;padding:6px 14px;border-radius:6px;'
                         f'border:1px solid #aaa;text-decoration:none">Googleでログイン</a>', unsafe_allow_html=True)
@@ -142,18 +152,63 @@ except Exception as e:  # noqa: BLE001
     else:
         st.error(f"読み込めませんでした：{e}")
 
+with st.sidebar:
+    st.header("条件")
+    st.subheader("時間刻み")
+    slot_opts = sorted(set(SLOT_CHOICES) | {settings.slot_minutes})
+    settings.slot_minutes = st.selectbox("時間刻み", slot_opts, slot_opts.index(settings.slot_minutes),
+                                         format_func=lambda m: f"{m}分", label_visibility="collapsed")
+    st.caption("フォームの刻みより粗くすると、刻みの間ずっと出勤できる人だけを入れます。")
+
+
+def replace_editor_state(name: str, value: dict) -> None:
+    """列の使い方・読み替えが変わったら、読み直して表を作り直す。"""
+    if st.session_state.get(name) != value:
+        st.session_state[name] = value
+        st.session_state["reading_edited"] = True  # 直したあとも「回答の読み方」を開いたままにする
+        st.session_state.pop("result", None)
+        st.rerun()
+
+
+# ===== 回答の読み方（ほかの人が作ったフォームでも、列の使い方と選択肢の読み替えを決めれば読める） =====
 staff, notes = [], []
 if dfs is not None:
     sheet = pick_response_sheet(dfs)
-    if sheet is None:
-        notes = ["フォームの回答のシートが見つかりません（「氏名」の列と、出勤できる時間のグリッドの列が必要です）。"]
-    else:
-        staff, notes = parse_responses(dfs[sheet], settings.slot_minutes)
+    if len(dfs) > 1:
+        sheet = st.selectbox("回答のシート", list(dfs), list(dfs).index(sheet))
+    df = dfs[sheet]
+    guessed = guess_roles(df)
+    overrides = st.session_state.setdefault("column_roles", dict(settings.column_roles))
+    roles = {h: overrides.get(h, g) for h, g in guessed.items()}
+    aliases = st.session_state.setdefault("choice_aliases", dict(settings.choice_aliases))
+    read = read_responses(df, settings.slot_minutes, roles=roles, aliases=aliases)
+    staff, notes = read.staff, read.notes
+    with st.expander("回答の読み方", expanded=not staff or bool(read.unreadable) or st.session_state.get("reading_edited", False)):
+        base = column_frame(df, roles)
+        edited_roles = st.data_editor(
+            base, hide_index=True, width="stretch", disabled=["列", "回答の例"],
+            height=min(36 * (len(base) + 1) + 3, 400),
+            column_config={"使い方": st.column_config.SelectboxColumn(options=ROLES, required=True)},
+            key=f"roles_{hash(tuple(base.itertuples(index=False)))}",
+        )
+        new_roles = dict(zip(edited_roles["列"], edited_roles["使い方"]))
+        # 推測と同じものは覚えない。この表にない列（ほかのフォーム）の指定は残す
+        replace_editor_state("column_roles", {**{h: r for h, r in overrides.items() if h not in guessed},
+                                              **{h: r for h, r in new_roles.items() if r != guessed.get(h)}})
+        al = alias_frame(read.unreadable, aliases, read.alias_used)
+        if not al.empty:
+            st.markdown("**選択肢の読み替え**")
+            edited_alias = st.data_editor(
+                al, hide_index=True, width="stretch", disabled=["選択肢", "回数"],
+                column_config={"読み替え": st.column_config.TextColumn(help="例：9:30-12:00 ／ 終日 ／ ×")},
+                key=f"alias_{hash(tuple(al.itertuples(index=False)))}",
+            )
+            replace_editor_state("choice_aliases", read_alias_frame(edited_alias))
+            st.caption("読み替えには時刻（9:30-12:00）、日付（11/20）、「終日」、出勤できないなら「×」を書けます。")
 found_dates = response_dates(staff)
 
 # ===== 条件 =====
 with st.sidebar:
-    st.header("条件")
     st.subheader("期間")
     if found_dates:
         period = st.date_input("期間", (found_dates[0], found_dates[-1]), label_visibility="collapsed")
@@ -165,16 +220,20 @@ with st.sidebar:
     settings.holidays = set(st.multiselect("祝日として扱う日", period_dates, format_func=date_label, placeholder="なし"))
 
     st.subheader("1回の勤務（時間）")
+    slot = settings.slot_minutes
+    step = slot / 60
     c1, c2, c3 = st.columns(3)
-    min_h = c1.number_input("最短", 0.5, 12.0, settings.min_shift_minutes / 60, step=0.5)
-    normal_h = c2.number_input("原則", 0.5, 12.0, settings.normal_max_minutes / 60, step=0.5)
-    max_h = c3.number_input("延長上限", 0.5, 16.0, settings.max_shift_minutes / 60, step=0.5)
+    min_h = c1.number_input("最短", step, 12.0, max(step, settings.min_shift_minutes / 60), step=step)
+    normal_h = c2.number_input("原則", step, 12.0, max(step, settings.normal_max_minutes / 60), step=step)
+    max_h = c3.number_input("延長上限", step, 16.0, max(step, settings.max_shift_minutes / 60), step=step)
     st.caption("「原則」を超えるのは、人数が足りない時間帯をうめるときだけです。1日に入るのは1回までです。")
     settings.min_shift_minutes, settings.normal_max_minutes, settings.max_shift_minutes = (
         round(min_h * 60), round(normal_h * 60), round(max_h * 60))
     shift_errors = []
     if not min_h <= normal_h <= max_h:
         shift_errors.append("勤務の長さは「最短 ≦ 原則 ≦ 延長上限」にしてください。")
+    if any(round(h * 60) % slot for h in (min_h, normal_h, max_h)):
+        shift_errors.append(f"勤務の長さは時間刻み（{slot}分）の倍数にしてください。")
 
     st.subheader("必要人数")
     edited = st.data_editor(
@@ -185,7 +244,7 @@ with st.sidebar:
     st.caption("下の行ほど優先します。曜日は 毎日・平日・土日祝・日祝・月水金・11/23 などで書けます。")
     settings.rules = [Rule(str(r["曜日"] or "毎日"), str(r["開始"]), str(r["終了"]), int(r["人数"] or 0))
                       for _, r in edited.iterrows() if pd.notna(r["開始"]) and pd.notna(r["終了"])]
-    rule_errors = check_rules(settings.rules) + shift_errors
+    rule_errors = check_rules(settings.rules, settings.slot_minutes) + shift_errors
     for err in rule_errors:
         st.error(err)
 
@@ -198,8 +257,10 @@ with st.sidebar:
     settings.time_limit_seconds = st.number_input("計算時間の上限（秒）", 5, 600, int(settings.time_limit_seconds))
 
     if st.button("この条件を既定にする", disabled=bool(rule_errors)):
+        settings.column_roles = dict(st.session_state.get("column_roles", settings.column_roles))
+        settings.choice_aliases = dict(st.session_state.get("choice_aliases", settings.choice_aliases))
         save_settings(settings, LOCAL_CONFIG)
-        st.success("保存しました。次回からこの条件が最初から入ります。")
+        st.success("保存しました。次回からこの条件（回答の読み方も）が最初から入ります。")
 
 if notes:
     with st.expander(f"入力の確認（{len(notes)}件）", expanded=not staff):
