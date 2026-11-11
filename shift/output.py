@@ -16,6 +16,7 @@ SHEET_DAILY = "日別"
 SHEET_PERSON = "個人別"
 SHEET_SUMMARY = "集計"
 SHEET_SHORT = "人数不足"
+SHEET_REQUEST = "日ごとの指定"
 
 WORK_FILL = "#93c5fd"
 LONG_FILL = "#fdba74"   # 原則の長さを超えた勤務
@@ -129,14 +130,36 @@ def shortage_table(problem: Problem, result: Result) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["日付", "時間帯", "必要人数", "配置人数", "不足", "責任者", "出勤できる人"])
 
 
+def request_table(problem: Problem, result: Result) -> pd.DataFrame:
+    """日ごとの指定と、そのとおりになったか。"""
+    worked = _by_person_day(result)
+    order = {st.name: i for i, st in enumerate(problem.staff)}
+    rows = []
+    for kind, keys in (("入れたい", problem.want), ("入れない", problem.avoid)):
+        for name, d in keys:
+            if name not in order or d not in problem.dates:
+                continue
+            items = worked.get((name, d), [])
+            rows.append({"日付": d, "氏名": name, "指定": kind, "結果": "、".join(s.label for s in items) or "入っていない",
+                         "_ok": bool(items) == (kind == "入れたい")})
+    rows.sort(key=lambda r: (r["日付"], order[r["氏名"]]))
+    df = pd.DataFrame(rows, columns=["日付", "氏名", "指定", "結果", "_ok"])
+    df["日付"] = [date_label(d) for d in df["日付"]]
+    df.insert(4, "指定どおり", ["○" if ok else "×" for ok in df.pop("_ok")])
+    return df
+
+
 def all_sheets(problem: Problem, result: Result) -> dict[str, pd.DataFrame]:
     """Googleスプレッドシートに書き込む表。"""
-    return {
+    sheets = {
         f"{SHEET_TABLE}": shift_table(problem, result).reset_index(),
         f"{SHEET_PERSON}": person_table(problem, result),
         f"{SHEET_SUMMARY}": summary_table(problem, result),
         f"{SHEET_SHORT}": shortage_table(problem, result),
     }
+    if problem.want or problem.avoid:
+        sheets[SHEET_REQUEST] = request_table(problem, result)
+    return sheets
 
 
 # ===== Excel =====
@@ -224,6 +247,8 @@ def to_xlsx(problem: Problem, result: Result) -> bytes:
     _write_frame(wb.create_sheet(SHEET_PERSON), person_table(problem, result))
     _write_frame(wb.create_sheet(SHEET_SUMMARY), summary_table(problem, result))
     _write_frame(wb.create_sheet(SHEET_SHORT), shortage_table(problem, result))
+    if problem.want or problem.avoid:
+        _write_frame(wb.create_sheet(SHEET_REQUEST), request_table(problem, result))
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

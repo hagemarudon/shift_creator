@@ -5,10 +5,12 @@
 必須
 - 1日の勤務は1回（連続）まで。長さは最短〜延長の上限まで
 - 最大日数・上限時間を超えない
+- 日ごとの指定で「入れない」にした人は、その日に入れない
 
 優先（重みは config.toml の [weights]）
 - 必要人数の不足をなくす（最優先）
 - 原則の長さ（例：2時間）を超えない。超えるのは不足をうめるときだけになるよう、不足より軽く・ほかより重くする
+- 日ごとの指定で「入れたい」にした人を、その日に入れる（不足をうめるより軽く、ほかより重い）
 - 責任者を入れる / 人数を多くしすぎない / 勤務時間を偏らせない / 希望勤務時間に近づける / 出勤日を少なく
 """
 from __future__ import annotations
@@ -31,6 +33,8 @@ def solve(problem: Problem, time_limit: float | None = None) -> Result:
     x = {}
     for p, st in enumerate(problem.staff):
         for d in problem.dates:
+            if (st.name, d) in problem.avoid:
+                continue
             for i, t in enumerate(problem.times):
                 if problem.required.get((d, t), 0) > 0 and (d, t) in st.available:
                     x[p, d, i] = m.NewBoolVar(f"x{p}_{d}_{i}")
@@ -70,6 +74,8 @@ def solve(problem: Problem, time_limit: float | None = None) -> Result:
             for v in here:
                 m.AddImplication(v, work)
             m.Add(work <= length)
+            if (st.name, d) in problem.want:
+                penalty.append(w.get("want", 0) * (1 - work))
             days_worked.append(work)
             total.extend(here)
         if st.max_days is not None and days_worked:
@@ -120,7 +126,8 @@ def solve(problem: Problem, time_limit: float | None = None) -> Result:
     code = solver.Solve(m)
     if code not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return Result(status="シフトを作れませんでした", shifts=[],
-                      shortage={k: problem.required[k] for k in short_vars})
+                      shortage={k: problem.required[k] for k in short_vars},
+                      want_missed=sorted(problem.want, key=lambda k: (k[1], k[0])))
     status = "最適なシフトができました" if code == cp_model.OPTIMAL else "計算時間内で一番よいシフトです"
 
     shifts = []
@@ -136,4 +143,9 @@ def solve(problem: Problem, time_limit: float | None = None) -> Result:
                     run = None
     shortage = {k: solver.Value(v) for k, v in short_vars.items() if solver.Value(v)}
     leader_missing = {k for k, v in lead_vars.items() if solver.Value(v)}
-    return Result(status=status, shifts=shifts, shortage=shortage, leader_missing=leader_missing)
+    worked = {(x.name, x.date) for x in shifts}
+    names, dates = {st.name for st in problem.staff}, set(problem.dates)
+    want_missed = sorted((k for k in problem.want if k[0] in names and k[1] in dates and k not in worked),
+                         key=lambda k: (k[1], k[0]))
+    return Result(status=status, shifts=shifts, shortage=shortage, leader_missing=leader_missing,
+                  want_missed=want_missed)

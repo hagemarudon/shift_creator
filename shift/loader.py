@@ -10,11 +10,12 @@ import datetime as dt
 import io
 import re
 import tomllib
+import unicodedata
 from pathlib import Path
 
 import pandas as pd
 
-from .model import WEEKDAYS, Problem, Rule, Settings, Staff, to_min
+from .model import WEEKDAYS, Problem, Rule, Settings, Staff, date_label, to_min
 
 LOCAL_CONFIG_NAME = "config.local.toml"
 
@@ -75,6 +76,11 @@ def _find(columns, keys) -> str | None:
         if any(k in str(c) for k in keys):
             return c
     return None
+
+
+def name_key(name: str) -> str:
+    """同じ人かどうかを見るための氏名。空白と全角・半角の違いを無視する。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(name)))
 
 
 def is_response_sheet(df: pd.DataFrame) -> bool:
@@ -155,8 +161,9 @@ def parse_responses(df: pd.DataFrame, slot_minutes: int, today: dt.date | None =
     """フォームの回答の表からスタッフと出勤できる時間を読む。同じ氏名は最後の回答を使う。"""
     today = today or dt.date.today()
     notes: list[str] = []
-    name_col = _find(df.columns, NAME_KEYS)
-    if name_col is None:
+    # 氏名の質問を記述からプルダウンに作り直すと、氏名の列が2つになる（古い回答は前の列、新しい回答は後の列）
+    name_pos = [i for i, c in enumerate(df.columns) if any(k in str(c) for k in NAME_KEYS)]
+    if not name_pos:
         return [], ["「氏名」の列が見つかりません。Googleフォームの回答のシートを読み込んでください。"]
     grid_cols = [(c, GRID_COL.match(str(c)).group(2).strip()) for c in df.columns if GRID_COL.match(str(c))]
     if not grid_cols:
@@ -166,11 +173,11 @@ def parse_responses(df: pd.DataFrame, slot_minutes: int, today: dt.date | None =
 
     by_name: dict[str, Staff] = {}
     unreadable: set[str] = set()
-    for _, row in df.iterrows():
-        name = _cell(row[name_col])
+    for n, (_, row) in enumerate(df.iterrows()):
+        name = next((v for v in (_cell(df.iat[n, i]) for i in name_pos) if v), "")
         if not name:
             continue
-        key = re.sub(r"\s+", "", name)
+        key = name_key(name)
         if key in by_name:
             notes.append(f"{name} さんは2回以上答えています。最後の回答を使います。")
         ref = _ref_date(row, ts_col, today)
@@ -208,6 +215,8 @@ def parse_responses(df: pd.DataFrame, slot_minutes: int, today: dt.date | None =
 
 
 # ===== 必要人数 =====
+WANT, AVOID, NO_REQUEST = "入れたい", "入れない", "－"
+
 def rule_matches(days: str, d: dt.date, holidays: set[dt.date]) -> bool:
     s = days.strip()
     hol = d.weekday() == 6 or d in holidays
@@ -264,9 +273,14 @@ def required_staff(rules: list[Rule], dates: list[dt.date], slot: int, holidays:
     return req, times
 
 
-def build_problem(staff: list[Staff], settings: Settings, dates: list[dt.date]) -> Problem:
+def build_problem(staff: list[Staff], settings: Settings, dates: list[dt.date],
+                  requests: dict[tuple[str, dt.date], str] | None = None) -> Problem:
+    """requests は日ごとの指定（(氏名, 日付) → 「入れたい」「入れない」）。"""
     req, times = required_staff(settings.rules, dates, settings.slot_minutes, settings.holidays)
-    return Problem(settings=settings, staff=staff, dates=dates, times=times, required=req)
+    requests = requests or {}
+    return Problem(settings=settings, staff=staff, dates=dates, times=times, required=req,
+                   want={k for k, v in requests.items() if v == WANT},
+                   avoid={k for k, v in requests.items() if v == AVOID})
 
 
 def response_dates(staff: list[Staff]) -> list[dt.date]:
@@ -310,3 +324,44 @@ def apply_staff_frame(staff: list[Staff], df: pd.DataFrame) -> list[Staff]:
             max_hours=_number(r["上限時間"]),
         ))
     return out
+
+
+# ===== 日ごとの指定（シフト作成者が「この日はこの人を入れたい／入れない」を決める） =====
+def request_frame(names: list[str], dates: list[dt.date],
+                  requests: dict[tuple[str, dt.date], str]) -> pd.DataFrame:
+    """スタッフ×日付の表。セルは「入れたい」「入れない」か「－」（指定なし）。氏名は回答の氏名をそのまま使う。"""
+    return pd.DataFrame([{"氏名": n, **{date_label(d): requests.get((n, d), NO_REQUEST) for d in dates}}
+                         for n in names],
+                        columns=["氏名"] + [date_label(d) for d in dates])
+
+
+def read_request_frame(df: pd.DataFrame, dates: list[dt.date]) -> dict[tuple[str, dt.date], str]:
+    out = {}
+    for _, r in df.iterrows():
+        for d in dates:
+            v = _cell(r.get(date_label(d)))
+            if v in (WANT, AVOID):
+                out[str(r["氏名"]), d] = v
+    return out
+
+
+def update_requests(old: dict[tuple[str, dt.date], str], df: pd.DataFrame, names: list[str],
+                    dates: list[dt.date]) -> dict[tuple[str, dt.date], str]:
+    """表に出ている人と日付の指定を表の内容で置きかえる。表にない人・日付の指定は残す（期間を戻したときのため）。"""
+    shown_names, shown_dates = set(names), set(dates)
+    out = {k: v for k, v in old.items() if k[0] not in shown_names or k[1] not in shown_dates}
+    out.update(read_request_frame(df, dates))
+    return out
+
+
+def request_notes(problem: Problem) -> list[str]:
+    """「入れたい」にしたのに、その日の営業時間に出勤できる時間がない人。"""
+    notes = []
+    by_name = {s.name: s for s in problem.staff}
+    for name, d in sorted(problem.want, key=lambda k: (k[1], k[0])):
+        st = by_name.get(name)
+        if st is None or d not in problem.dates:
+            continue
+        if not any(problem.required.get((d, t), 0) > 0 and (d, t) in st.available for t in problem.times):
+            notes.append(f"{name} さんは {date_label(d)} に出勤できる時間がない（フォームの回答）ので、入れられません。")
+    return notes
