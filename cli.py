@@ -21,7 +21,8 @@ def main(src: str, dst: str) -> int:
     if sheet is None:
         print("フォームの回答のシートが見つかりません")
         return 1
-    staff, notes = parse_responses(dfs[sheet], settings.slot_minutes)
+    staff, notes = parse_responses(dfs[sheet], settings.slot_minutes,
+                                   roles=settings.column_roles, aliases=settings.choice_aliases)
     for n in notes:
         print("注意:", n)
     if not staff:

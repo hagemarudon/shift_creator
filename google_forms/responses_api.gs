@@ -33,11 +33,11 @@ function text_(s) {
 function responseSheet_() {
   var sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets();
   for (var i = 0; i < sheets.length; i++) {
-    if (sheets[i].getName().indexOf('フォームの回答') === 0) return sheets[i];
+    if (/^(フォームの回答|Form [Rr]esponses)/.test(sheets[i].getName())) return sheets[i];
   }
   for (var j = 0; j < sheets.length; j++) {
     var head = sheets[j].getRange(1, 1, 1, Math.max(1, sheets[j].getLastColumn())).getDisplayValues()[0];
-    if (head.some(function (h) { return h.indexOf('氏名') >= 0; })) return sheets[j];
+    if (head.some(function (h) { return /氏名|名前|Name/.test(h); })) return sheets[j];
   }
   return null;
 }
@@ -63,7 +63,7 @@ function doPost(e) {
   var body = JSON.parse(e.postData.contents);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   Object.keys(body.sheets || {}).forEach(function (name) {
-    if (name.indexOf('フォームの回答') === 0) return; // 回答のシートは上書きしない
+    if (/^(フォームの回答|Form [Rr]esponses)/.test(name)) return; // 回答のシートは上書きしない
     var rows = body.sheets[name];
     var sh = ss.getSheetByName(name) || ss.insertSheet(name);
     sh.clear();
