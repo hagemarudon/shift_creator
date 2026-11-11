@@ -275,7 +275,7 @@ def day_html(problem: Problem, result: Result, d: dt.date) -> str:
     for s in sorted((s for s in result.shifts if s.date == d), key=lambda s: (s.start, s.end)):
         color = LONG_FILL if _is_long(problem, s.end - s.start) else WORK_FILL
         tds = "".join(f"<td style='background:{color if s.start <= t < s.end else 'transparent'};"
-                      f"border-left:1px solid {'#ccc' if t % 60 == 0 else '#eee'}'></td>" for t in times)
+                      f"border-left:1px solid {'rgba(128,128,128,.5)' if t % 60 == 0 else 'rgba(128,128,128,.2)'}'></td>" for t in times)
         rows.append(f"<tr><th style='text-align:left;white-space:nowrap;font-weight:normal;padding-right:8px'>"
                     f"{s.name} <small style='opacity:.7'>{s.label}</small></th>{tds}</tr>")
     tds = []
@@ -283,7 +283,8 @@ def day_html(problem: Problem, result: Result, d: dt.date) -> str:
         req = problem.required.get((d, t), 0)
         n = cnt.get((d, t), 0)
         bg = SHORT_FILL if result.shortage.get((d, t)) else "transparent"
-        tds.append(f"<td style='background:{bg};font-size:10px;text-align:center;color:#111'>"
+        fg = '#111' if result.shortage.get((d, t)) else 'inherit'
+        tds.append(f"<td style='background:{bg};font-size:10px;text-align:center;color:{fg}'>"
                    f"{f'{n}/{req}' if req else ''}</td>")
     rows.append(f"<tr><th style='text-align:left;font-weight:normal;font-size:11px'>配置／必要</th>{''.join(tds)}</tr>")
     return ("<div style='overflow-x:auto'><table style='border-collapse:collapse;width:100%;table-layout:fixed'>"

@@ -36,7 +36,17 @@ SRC_FILE, SRC_GOOGLE, SRC_SAMPLE = "ファイル（CSV・Excel）", "Googleス�
 SLOT_CHOICES = [15, 30, 60, 120]
 
 st.set_page_config(page_title="シフト作成", layout="wide")
-st.title("シフト作成")
+
+# 見た目：ふだんは白い背景に黒い文字（.streamlit/config.toml）。スイッチを入れた人の画面だけダークモードにする
+# （テーマの設定はサーバー全体で共有されるので、ここでは色を反転させる CSS で切り替える）
+DARK_CSS = """<style>
+html { filter: invert(1) hue-rotate(180deg); background: #fff; }
+img, video { filter: invert(1) hue-rotate(180deg); }
+</style>"""
+title_col, theme_col = st.columns([5, 1], vertical_alignment="bottom")
+title_col.title("シフト作成")
+if theme_col.toggle("ダークモード", key="dark_mode"):
+    st.html(DARK_CSS)
 
 LOCAL_CONFIG = ROOT / LOCAL_CONFIG_NAME
 settings = load_settings(ROOT / "config.toml", overlay=LOCAL_CONFIG)
