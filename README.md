@@ -3,6 +3,8 @@
 Googleフォームで集めた「30分ごとの出勤できる時間」を読み込み、時間帯ごとの必要人数を満たすシフトを自動で作ります。
 自動作成には Google の OR-Tools（CP-SAT）を使っています。画面とシステムの作りは [timetable_creator](https://github.com/hagemarudon/timetable_creator) にそろえています。
 
+NF2026（11月祭）のシフト希望調査のフォームから作るときは、別のプログラム [nf/](nf/README.md)（`streamlit run nf/app.py`）を使います。
+
 ## 使い方
 
 ```bash
