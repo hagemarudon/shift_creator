@@ -163,6 +163,55 @@ def read_published_csv(url: str) -> dict[str, pd.DataFrame]:
     return {"フォームの回答": pd.read_csv(io.BytesIO(data), dtype=str, encoding="utf-8-sig", keep_default_na=False)}
 
 
+# ===== リンクで共有したスプレッドシート・フォームのURL =====
+FORM_URL_HELP = (
+    "これはGoogleフォームのURLです。フォームのURLからは回答を読めません。"
+    "フォームを作った人（自分で作ったなら自分）が、次のどちらかをしてください。\n\n"
+    "1. フォームの「回答」タブで「スプレッドシートにリンク」（緑のボタン）を押してスプレッドシートを作り、"
+    "その「共有」で一般的なアクセスを「リンクを知っている全員」（閲覧者）にする。そのスプレッドシートのURLをここに貼る\n"
+    "2. そのスプレッドシートを「ファイル → ダウンロード → カンマ区切り形式（.csv）」で保存し、"
+    "上の「ファイル（CSV・Excel）」から読み込む"
+)
+NOT_SHARED_HELP = (
+    "このスプレッドシートを読めませんでした。スプレッドシートの「共有」で一般的なアクセスを"
+    "「リンクを知っている全員」（閲覧者）にしてもらうか、CSVでダウンロードして「ファイル（CSV・Excel）」から読み込んでください。"
+)
+
+
+def is_form_url(url: str) -> bool:
+    """Googleフォームの回答画面・編集画面のURL（forms.gle の短縮URLも）。"""
+    return bool(re.search(r"docs\.google\.com/forms/|forms\.gle/", url))
+
+
+def is_sheet_url(url: str) -> bool:
+    return bool(re.search(r"docs\.google\.com/spreadsheets/d/", url))
+
+
+def shared_export_url(url: str) -> str:
+    """スプレッドシートのURLを、全シートを Excel で受け取るURLにする。"""
+    if "/spreadsheets/d/e/" in url:  # 「ウェブに公開」したURL（…/pubhtml など）
+        return re.sub(r"/pub[^/]*$", "", url.split("?")[0].split("#")[0]) + "/pub?output=xlsx"
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
+    if not m:
+        raise ValueError("GoogleスプレッドシートのURLではないようです。")
+    return f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=xlsx"
+
+
+def read_shared_sheet(url: str) -> dict[str, pd.DataFrame]:
+    """「リンクを知っている全員」に共有したスプレッドシート（またはウェブに公開したもの）を、ログインなしで読む。"""
+    import io
+    import urllib.error
+
+    try:
+        with urllib.request.urlopen(shared_export_url(url), timeout=60) as r:
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        raise ValueError(NOT_SHARED_HELP) from e
+    if not data.startswith(b"PK"):  # 共有されていないとログイン画面（HTML）が返る
+        raise ValueError(NOT_SHARED_HELP)
+    return pd.read_excel(io.BytesIO(data), sheet_name=None, dtype=str, keep_default_na=False)
+
+
 # ===== Apps Script のウェブアプリ（google_forms/responses_api.gs）経由で読み書きする =====
 def is_script_url(url: str) -> bool:
     return "script.google.com/macros/s/" in url

@@ -91,3 +91,37 @@ def test_write_script(monkeypatch):
     gs.write_script(SCRIPT, {"集計": pd.DataFrame({"氏名": ["佐藤"], "最大日数": [None], "合計時間": [2.5]})})
     assert sent["method"] == "POST"
     assert sent["body"]["sheets"]["集計"] == [["氏名", "最大日数", "合計時間"], ["佐藤", "", "2.5"]]
+
+
+def test_form_url_and_shared_sheet_url():
+    assert gs.is_form_url("https://docs.google.com/forms/d/e/1FAIpQLSc/viewform?usp=header")
+    assert gs.is_form_url("https://forms.gle/abc123")
+    assert not gs.is_form_url("https://docs.google.com/spreadsheets/d/abc/edit")
+    assert gs.is_sheet_url("https://docs.google.com/spreadsheets/d/abc/edit?usp=sharing")
+    assert gs.shared_export_url("https://docs.google.com/spreadsheets/d/1aB-c_d/edit?usp=sharing#gid=0") == \
+        "https://docs.google.com/spreadsheets/d/1aB-c_d/export?format=xlsx"
+    assert gs.shared_export_url("https://docs.google.com/spreadsheets/d/e/2PACX-x/pubhtml?gid=0") == \
+        "https://docs.google.com/spreadsheets/d/e/2PACX-x/pub?output=xlsx"
+
+
+def test_read_shared_sheet(monkeypatch):
+    import pandas as pd
+    import pytest
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf) as w:
+        pd.DataFrame({"お名前": ["佐藤"], "入れる日": ["11/20(金)"]}).to_excel(w, sheet_name="フォームの回答 1", index=False)
+    seen = {}
+
+    def fake(url, timeout):
+        seen["url"] = url
+        return _Resp(buf.getvalue())
+
+    monkeypatch.setattr(gs.urllib.request, "urlopen", fake)
+    dfs = gs.read_shared_sheet("https://docs.google.com/spreadsheets/d/abc/edit")
+    assert seen["url"].endswith("/d/abc/export?format=xlsx")
+    assert dfs["フォームの回答 1"].loc[0, "お名前"] == "佐藤"
+    # 共有されていないとログイン画面が返る
+    monkeypatch.setattr(gs.urllib.request, "urlopen", lambda url, timeout: _Resp(b"<!DOCTYPE html><html>"))
+    with pytest.raises(ValueError, match="リンクを知っている全員"):
+        gs.read_shared_sheet("https://docs.google.com/spreadsheets/d/abc/edit")

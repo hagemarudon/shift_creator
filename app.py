@@ -89,34 +89,42 @@ try:
         if up:
             dfs = read_file(up.name, up.getvalue())
         st.caption("回答のスプレッドシートで「ファイル → ダウンロード → カンマ区切り形式（.csv）」で保存したものを選べます。")
-    elif source == SRC_GOOGLE and (service_creds or default_url):
-        # ログインなし：サービスアカウントに共有したシート、またはウェブに公開したCSVを読む
+    elif source == SRC_GOOGLE and (service_creds or default_url or oauth is None):
+        # ログインなし：Apps Script・サービスアカウント・リンクで共有したシート・ウェブに公開したCSVを読む
         c1, c2 = st.columns([4, 1])
-        sheet_url = c1.text_input("回答のURL", default_url, type="password" if gs.is_script_url(default_url) else "default")
+        sheet_url = c1.text_input("回答のURL", default_url, type="password" if gs.is_script_url(default_url) else "default",
+                                  help="フォームの回答が入っているスプレッドシートのURL（フォームのURLではありません）")
         if gs.is_script_url(sheet_url):
             write_script_url = sheet_url
-        elif service_creds is not None and not gs.is_published_csv(sheet_url):
+        elif service_creds is not None and gs.is_sheet_url(sheet_url) and not gs.is_published_csv(sheet_url):
             write_creds = service_creds
             st.caption(f"スプレッドシートを {service_creds.service_account_email} に共有（編集者）しておくと読めます。")
         cached = st.session_state.get("google_dfs")
-        if c2.button("再読み込み", width="stretch") or (sheet_url and (not cached or cached[0] != sheet_url)):
+        if gs.is_form_url(sheet_url):
+            st.error(gs.FORM_URL_HELP)
+        elif c2.button("再読み込み", width="stretch") or (sheet_url and (not cached or cached[0] != sheet_url)):
             if gs.is_script_url(sheet_url):
                 cached = (sheet_url, gs.read_script(sheet_url))
             elif gs.is_published_csv(sheet_url):
                 cached = (sheet_url, gs.read_published_csv(sheet_url))
+            elif not gs.is_sheet_url(sheet_url):
+                raise ValueError("このURLは読めません。フォームの回答が入っているGoogleスプレッドシートのURLを貼ってください。")
             elif service_creds is None:
-                raise ValueError("このURLは読めません。READMEの「回答を自動で読み込む」の設定をしてください。")
+                cached = (sheet_url, gs.read_shared_sheet(sheet_url))
             else:
-                cached = (sheet_url, gs.read_sheet(service_creds, sheet_url))
+                try:
+                    cached = (sheet_url, gs.read_sheet(service_creds, sheet_url))
+                except Exception:  # noqa: BLE001  サービスアカウントに共有していなくても、リンクで共有していれば読める
+                    cached = (sheet_url, gs.read_shared_sheet(sheet_url))
+                    st.session_state["google_via_link"] = sheet_url
             st.session_state["google_dfs"] = cached
             st.session_state.pop("result", None)
         if cached and cached[0] == sheet_url:
             dfs = cached[1]
+        if st.session_state.get("google_via_link") == sheet_url:
+            write_creds = None  # リンクの共有で読んだシートには書き込めない
     elif source == SRC_GOOGLE:
-        if oauth is None:
-            st.info("Googleスプレッドシートから読む設定がまだです。設定方法は README の「回答を自動で読み込む」にあります。"
-                    "それまではCSVかExcelで読み込めます。")
-        elif google_credentials(oauth) is None:
+        if google_credentials(oauth) is None:
             url = html.escape(gs.login_url(oauth, gs.make_state(oauth)))
             st.markdown(f'<a href="{url}" target="_self" style="display:inline-block;padding:6px 14px;border-radius:6px;'
                         f'border:1px solid #aaa;text-decoration:none">Googleでログイン</a>', unsafe_allow_html=True)
