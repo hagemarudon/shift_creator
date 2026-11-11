@@ -1,0 +1,6 @@
+# 画面の見た目。ふだんは白い背景に黒い文字（画面右上のスイッチでダークモードに切り替えられる）
+[theme]
+base = "light"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f3f4f6"
+textColor = "#000000"
